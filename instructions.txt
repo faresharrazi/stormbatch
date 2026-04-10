@@ -1,0 +1,261 @@
+Build a simple MVP web app called “StormBatch”.
+
+Goal:
+Create a small internal tool that takes:
+1. a Livestorm API key,
+2. an Excel file (.xlsx),
+3. one or more Livestorm session IDs,
+
+and bulk-registers all rows from the Excel file into the selected Livestorm session(s) using Livestorm’s bulk registration endpoint.
+
+Important constraints:
+- Keep it simple and working.
+- No database.
+- No queue/job system.
+- No authentication system.
+- No fancy tooling.
+- No background workers.
+- No Redis.
+- No Celery.
+- No Docker unless absolutely necessary.
+- No TypeScript unless needed; plain JavaScript is fine.
+- Focus on clean, readable code and a straightforward UX.
+
+Tech stack:
+- Frontend: Vue 3 + Vite
+- Backend: FastAPI (Python)
+- Excel parsing: pandas + openpyxl
+- HTTP requests to Livestorm: httpx or requests
+- Run locally with simple commands
+
+Product behavior:
+The app should:
+- Let the user paste a Livestorm API key
+- Let the user upload an Excel file
+- Detect the Excel columns automatically
+- Preview the first few rows
+- Let the user map Excel columns to Livestorm people attribute IDs
+- Remind the user that the Livestorm registration settings must already contain matching people attributes with the exact IDs they map to
+- Let the user paste one or multiple session IDs
+- Submit a bulk registration job for each session ID
+- Poll the Livestorm job endpoint until the job finishes
+- Fetch and display final task results
+- Show success/failure status in a simple way
+
+Important Livestorm API notes:
+- Use the Livestorm bulk registration endpoint: POST /v1/sessions/{id}/people/bulk, which creates an asynchronous job rather than returning the final registration result immediately. The official docs describe it as a job-based mechanism and document a 202 Accepted response. :contentReference[oaicite:0]{index=0}
+- After creating the job, poll the related job endpoint and then fetch the job tasks/results when the job is finished, following the job flow described in Livestorm’s documentation/changelog. :contentReference[oaicite:1]{index=1}
+
+Expected UX:
+Create a very simple UI with these sections on a single page:
+1. API key input
+2. Session IDs input (textarea, one per line or comma-separated)
+3. Excel upload
+4. Detected columns + preview table
+5. Mapping UI:
+   - each Excel column can be mapped to a Livestorm attribute ID
+   - allow “ignore” for unused columns
+   - auto-suggest common mappings like:
+     - Email -> email
+     - First Name -> first_name
+     - Last Name -> last_name
+6. Submit button
+7. Job status/results area
+
+Validation rules:
+- The uploaded file must be .xlsx
+- Must detect at least one row
+- The user must map an email column
+- Session IDs must not be empty
+- Duplicate mapped Livestorm attribute IDs should be blocked
+- Empty email values should be rejected before submission
+- Detect duplicate emails in the file and show a warning
+- Trim whitespace from headers and values
+- Normalize Excel column names for auto-suggestions:
+  - lowercase
+  - trim spaces
+  - replace spaces with underscores
+
+Behavior details:
+- Do not assume Excel column names are the same as Livestorm attribute IDs
+- The user must explicitly map Excel columns to Livestorm attribute IDs
+- Example:
+  - Excel column “Company Name”
+  - Livestorm attribute id “company”
+- Show a visible reminder like:
+  “Make sure the mapped Livestorm people attributes already exist in the registration settings of the selected sessions and that the IDs match exactly.”
+
+Backend requirements:
+Create a small FastAPI app with clear separation of concerns.
+
+Suggested file structure:
+backend/
+  app/
+    main.py
+    routes/
+      preview.py
+      registration.py
+      jobs.py
+    services/
+      excel_parser.py
+      mapping_service.py
+      payload_builder.py
+      livestorm_client.py
+    schemas/
+      preview.py
+      registration.py
+      jobs.py
+
+Frontend requirements:
+Use Vue 3 and keep the UI minimal and readable.
+
+Suggested file structure:
+frontend/
+  src/
+    App.vue
+    components/
+      ApiKeyInput.vue
+      SessionIdsInput.vue
+      FileUpload.vue
+      PreviewTable.vue
+      MappingForm.vue
+      JobResults.vue
+
+Backend API design:
+Implement these FastAPI endpoints:
+
+1. POST /api/preview
+Purpose:
+- receive uploaded Excel file
+- read the first sheet
+- return:
+  - detected headers
+  - preview rows (first 5 rows)
+  - normalized header suggestions
+
+2. POST /api/register
+Purpose:
+- receive:
+  - api_key
+  - session_ids
+  - mapping
+  - parsed rows or re-read file
+- validate everything
+- build Livestorm payloads
+- create one Livestorm bulk job per session ID
+- return the created job IDs
+
+3. POST /api/job-status
+Purpose:
+- receive:
+  - api_key
+  - session_id
+  - job_id
+- fetch current Livestorm job status
+- if finished, optionally also fetch tasks
+- return a simplified object for the UI
+
+Livestorm payload building:
+Transform each row into this structure:
+
+{
+  "data": {
+    "type": "jobs",
+    "attributes": {
+      "tasks": [
+        {
+          "fields": [
+            {
+              "id": "email",
+              "value": "john@example.com"
+            },
+            {
+              "id": "first_name",
+              "value": "John"
+            },
+            {
+              "id": "company",
+              "value": "Acme"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
+
+Rules for payload generation:
+- Build one task per Excel row
+- Build one bulk job request per session ID
+- Skip ignored columns
+- Skip empty values for optional fields
+- Do not skip email if it is empty; fail validation before submission
+- Preserve string values cleanly
+- Convert NaN/null to empty or skip appropriately
+
+Polling behavior:
+- The frontend may poll the backend every 2–3 seconds after job creation
+- The backend should call Livestorm job endpoints and return:
+  - pending / processing / ended / failed if applicable
+- Once ended, fetch job tasks and show per-row outcomes if available
+
+Error handling:
+- Show clear user-facing errors
+- Examples:
+  - “Missing required email mapping”
+  - “Session ID is invalid”
+  - “Excel file is empty”
+  - “Livestorm API request failed”
+  - “One or more mapped attribute IDs may not exist in Livestorm registration settings”
+- Backend should return readable JSON errors
+- Frontend should show them without crashing
+
+What I want you to generate:
+1. Full project structure
+2. Backend FastAPI code
+3. Frontend Vue code
+4. Simple local run instructions
+5. Requirements files/package files
+6. Minimal styling only
+7. Clear comments in code
+8. A README explaining:
+   - what the app does
+   - how to run frontend and backend
+   - how column mapping works
+   - that Livestorm people attributes must already exist
+   - that the app uses Livestorm’s asynchronous bulk registration job flow
+
+Implementation preferences:
+- Keep code small and understandable
+- Avoid over-engineering
+- No persistence
+- No login
+- No saving API keys
+- No environment complexity beyond what is necessary
+- Prioritize something I can run locally quickly and extend later
+
+Also add these practical UI details:
+- Show first 5 rows of the uploaded sheet
+- Use the first sheet only
+- Accept multiple session IDs via textarea
+- Support comma-separated or newline-separated session IDs
+- Show a summary before submission:
+  - number of rows
+  - detected email column
+  - number of session IDs
+  - mapped fields
+- After completion, show:
+  - total rows processed
+  - successful rows
+  - failed rows
+  - simple per-session job results
+
+Code quality:
+- Write production-sane code but keep it simple
+- Use Pydantic models where helpful
+- Add basic CORS handling for local development
+- Add helper functions for header normalization and mapping suggestions
+- Keep the HTTP client code isolated in a Livestorm client service
+
+Finally:
+Please generate the full code for this MVP, file by file, with concise explanations between files.
