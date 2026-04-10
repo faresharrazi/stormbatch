@@ -76,12 +76,6 @@ function retryResults(job) {
   return job.retry_results || [];
 }
 
-function canDiagnose(job) {
-  return isFinal(job)
-    && String(job.status).toLowerCase() === "failed"
-    && !failedTasks(job).length;
-}
-
 function summaryText(job) {
   if (!isFinal(job)) {
     return "Livestorm is still processing this session.";
@@ -157,23 +151,6 @@ function cardClass(job) {
             <strong>{{ rowLabel(task) }}</strong>
             <p>{{ displayError(task) }}</p>
           </div>
-        </div>
-      </div>
-
-      <div v-else-if="canDiagnose(job)" class="failed-panel">
-        <div class="failed-header">
-          <div>
-            <strong>No row-level details from bulk job</strong>
-            <p>Check which emails already exist, then try missing ones with single registration.</p>
-          </div>
-          <button
-            class="retry-button"
-            type="button"
-            :disabled="props.retryingSessions[job.session_id]"
-            @click="emit('retry-failed', job)"
-          >
-            {{ props.retryingSessions[job.session_id] ? "Diagnosing..." : "Diagnose rows" }}
-          </button>
         </div>
       </div>
 

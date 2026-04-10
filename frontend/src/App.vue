@@ -7,6 +7,8 @@ import PreviewTable from "./components/PreviewTable.vue";
 import SessionIdsInput from "./components/SessionIdsInput.vue";
 import livestormIcon from "../assets/Icon-Livestorm-Primary.png";
 
+const BULK_JOB_CHUNK_SIZE = 50;
+
 const apiKey = ref("");
 const sessionIds = ref("");
 const selectedFile = ref(null);
@@ -64,6 +66,17 @@ const finishedJobs = computed(() =>
   ).length,
 );
 
+const expectedJobCount = computed(() => {
+  if (!preview.value || !parsedSessionIds.value.length) {
+    return parsedSessionIds.value.length;
+  }
+  const chunksPerSession = Math.max(
+    1,
+    Math.ceil(preview.value.row_count / BULK_JOB_CHUNK_SIZE),
+  );
+  return parsedSessionIds.value.length * chunksPerSession;
+});
+
 const progressPercent = computed(() => {
   if (isSubmitting.value) {
     if (!totalSessionCount.value) {
@@ -95,7 +108,7 @@ const registrationSummary = computed(() => {
   ).length;
 
   return {
-    jobs: totalSessionCount.value || jobs.value.length || (isSubmitting.value ? parsedSessionIds.value.length : 0),
+    jobs: totalSessionCount.value || jobs.value.length || (isSubmitting.value ? expectedJobCount.value : 0),
     created: createdSessionCount.value,
     finished: finishedJobs.value,
     totalTasks: taskResults.length,
@@ -106,7 +119,7 @@ const registrationSummary = computed(() => {
 
 const progressTitle = computed(() => {
   if (isSubmitting.value) {
-    return "Creating Livestorm jobs one session at a time...";
+    return "Creating Livestorm jobs in safe batches...";
   }
   if (isPollingJobs.value) {
     return "Livestorm is processing...";
@@ -227,11 +240,12 @@ function stopPolling() {
   }
 }
 
-function attachRowResults(tasks) {
+function attachRowResults(tasks, job) {
+  const sourceRows = job?.row_results?.length ? job.row_results : rowResults.value;
   return tasks.map((task, index) => ({
     ...task,
-    row_result: rowResults.value[index] || {
-      row_number: index + 2,
+    row_result: sourceRows[index] || {
+      row_number: (job?.row_start || 2) + index,
       email: "",
       fields: [],
     },
@@ -283,7 +297,7 @@ async function pollJobStatuses() {
       }
 
       job.status = data.status;
-      job.tasks = attachRowResults(data.tasks || []);
+      job.tasks = attachRowResults(data.tasks || [], job);
       job.raw = data.raw || {};
     }),
   );
@@ -302,12 +316,8 @@ async function retryFailedRows(job) {
     .map((task) => task.row_result)
     .filter((row) => row?.email);
 
-  if (!failedRegistrants.length && String(job.status).toLowerCase() === "failed") {
-    failedRegistrants = rowResults.value;
-  }
-
   if (!failedRegistrants.length) {
-    job.error = "No row details were available to diagnose with single registration.";
+    job.error = "No failed row details were available to retry with single registration.";
     return;
   }
 
@@ -385,12 +395,16 @@ async function submitRegistration() {
   isSubmitting.value = true;
   jobs.value = [];
   hasSubmittedJobs.value = false;
-  totalSessionCount.value = parsedSessionIds.value.length;
+  totalSessionCount.value = expectedJobCount.value;
   createdSessionCount.value = 0;
   stopPolling();
 
   try {
     for (const sessionId of parsedSessionIds.value) {
+      const expectedChunksForSession = Math.max(
+        1,
+        Math.ceil(preview.value.row_count / BULK_JOB_CHUNK_SIZE),
+      );
       const formData = new FormData();
       formData.append("api_key", apiKey.value.trim());
       formData.append("session_ids", sessionId);
@@ -408,30 +422,40 @@ async function submitRegistration() {
           session_id: sessionId,
           job_id: "not-created",
           status: "failed",
+          chunk_index: 1,
+          chunk_count: expectedChunksForSession,
+          row_start: 2,
+          row_count: preview.value.row_count,
+          row_results: rowResults.value,
           tasks: [],
           raw: {},
           error: data.detail || "Registration failed",
         });
+        createdSessionCount.value += expectedChunksForSession;
       } else {
-        const [createdJob] = data.jobs;
-        jobs.value.push({
-          ...createdJob,
-          tasks: [],
-          raw: {},
-          error: "",
-        });
         if (!rowResults.value.length) {
           rowResults.value = data.row_results || [];
         }
+        (data.jobs || []).forEach((createdJob) => {
+          jobs.value.push({
+            ...createdJob,
+            row_results: createdJob.row_results || [],
+            tasks: [],
+            raw: {},
+            error: "",
+          });
+        });
         duplicateEmails.value = data.duplicate_emails || [];
+        createdSessionCount.value += (data.jobs || []).length;
       }
 
-      createdSessionCount.value += 1;
       if (createdSessionCount.value < totalSessionCount.value) {
         await wait(900);
       }
     }
 
+    totalSessionCount.value = jobs.value.length || totalSessionCount.value;
+    createdSessionCount.value = jobs.value.length || createdSessionCount.value;
     hasSubmittedJobs.value = true;
 
     if (duplicateEmails.value.length) {
@@ -555,8 +579,8 @@ async function submitRegistration() {
           <span class="step-label">Step 4</span>
           <h2>Ready to batch register?</h2>
           <p>
-            This will create {{ parsedSessionIds.length }} Livestorm job(s) for
-            {{ preview.row_count }} registrant row(s).
+            This will create {{ expectedJobCount }} Livestorm job(s) in batches of
+            {{ BULK_JOB_CHUNK_SIZE }} registrants or fewer.
           </p>
         </div>
         <div class="cta-actions">
