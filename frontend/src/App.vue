@@ -90,6 +90,9 @@ const registrationSummary = computed(() => {
     const status = task?.attributes?.status || task?.status;
     return String(status).toLowerCase() === "failed";
   }).length;
+  const failedJobs = jobs.value.filter(
+    (job) => String(job.status).toLowerCase() === "failed",
+  ).length;
 
   return {
     jobs: totalSessionCount.value || jobs.value.length || (isSubmitting.value ? parsedSessionIds.value.length : 0),
@@ -97,6 +100,7 @@ const registrationSummary = computed(() => {
     finished: finishedJobs.value,
     totalTasks: taskResults.length,
     failedTasks,
+    failedJobs,
   };
 });
 
@@ -104,7 +108,21 @@ const progressTitle = computed(() => {
   if (isSubmitting.value) {
     return "Creating Livestorm jobs one session at a time...";
   }
-  return isPollingJobs.value ? "Livestorm is processing..." : "Batch complete";
+  if (isPollingJobs.value) {
+    return "Livestorm is processing...";
+  }
+  return registrationSummary.value.failedJobs ? "Batch finished with failed jobs" : "Batch complete";
+});
+
+const completionTitle = computed(() =>
+  registrationSummary.value.failedJobs ? "Some Livestorm jobs failed" : "Livestorm jobs confirmed",
+);
+
+const completionMessage = computed(() => {
+  if (registrationSummary.value.failedJobs) {
+    return `${registrationSummary.value.failedJobs} of ${registrationSummary.value.jobs} job(s) failed. Review the session details below.`;
+  }
+  return `${registrationSummary.value.jobs} job(s) finished successfully. Review per-session and per-row outcomes below.`;
 });
 
 function resetMessages() {
@@ -580,16 +598,17 @@ async function submitRegistration() {
       </div>
     </section>
 
-    <section v-if="hasSubmittedJobs && !isPollingJobs && jobs.length" class="confirmation-card">
+    <section
+      v-if="hasSubmittedJobs && !isPollingJobs && jobs.length"
+      class="confirmation-card"
+      :class="{ failed: registrationSummary.failedJobs }"
+    >
       <div>
-        <span class="confirmation-icon">OK</span>
+        <span class="confirmation-icon">{{ registrationSummary.failedJobs ? "!" : "OK" }}</span>
       </div>
       <div>
-        <h2>Livestorm jobs confirmed</h2>
-        <p>
-          {{ registrationSummary.jobs }} job(s) finished. Review per-session and
-          per-row outcomes below.
-        </p>
+        <h2>{{ completionTitle }}</h2>
+        <p>{{ completionMessage }}</p>
       </div>
       <button class="new-batch-button" type="button" @click="startNewBatch">
         New Batch
@@ -1017,6 +1036,13 @@ body {
   margin-bottom: 18px;
 }
 
+.confirmation-card.failed {
+  border-color: #fecaca;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(254, 242, 242, 0.9)),
+    repeating-linear-gradient(45deg, rgba(185, 28, 28, 0.035) 0 8px, transparent 8px 16px);
+}
+
 .confirmation-icon {
   display: grid;
   place-items: center;
@@ -1027,6 +1053,10 @@ body {
   color: white;
   font-weight: 900;
   font-size: 1.4rem;
+}
+
+.confirmation-card.failed .confirmation-icon {
+  background: #b91c1c;
 }
 
 .new-batch-button {
