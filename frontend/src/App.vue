@@ -11,6 +11,7 @@ const apiKey = ref("");
 const sessionIds = ref("");
 const selectedFile = ref(null);
 const preview = ref(null);
+const columnSettings = ref([]);
 const jobs = ref([]);
 const duplicateEmails = ref([]);
 const errorMessage = ref("");
@@ -43,21 +44,17 @@ const emailColumn = computed(() => {
 const hasEmailColumn = computed(() => Boolean(emailColumn.value));
 
 const autoMapping = computed(() => {
-  if (!preview.value) {
-    return {};
-  }
   return Object.fromEntries(
-    preview.value.headers.map((header) => [
-      header,
-      preview.value.normalized_headers[header],
-    ]),
+    columnSettings.value
+      .filter((column) => column.include)
+      .map((column) => [column.column, column.attributeId.trim()]),
   );
 });
 
 const mappedAttributePreview = computed(() =>
-  Object.entries(autoMapping.value).map(([column, attributeId]) => ({
-    column,
-    attributeId,
+  columnSettings.value.map((column) => ({
+    ...column,
+    required: column.attributeId === "email",
   })),
 );
 
@@ -118,6 +115,7 @@ function resetMessages() {
 function onFileSelected(file) {
   selectedFile.value = file;
   preview.value = null;
+  columnSettings.value = [];
   jobs.value = [];
   rowResults.value = [];
   hasSubmittedJobs.value = false;
@@ -130,6 +128,7 @@ function startNewBatch() {
   sessionIds.value = "";
   selectedFile.value = null;
   preview.value = null;
+  columnSettings.value = [];
   jobs.value = [];
   rowResults.value = [];
   hasSubmittedJobs.value = false;
@@ -169,6 +168,14 @@ async function loadPreview() {
     }
 
     preview.value = data;
+    columnSettings.value = data.headers.map((header) => {
+      const normalized = data.normalized_headers[header];
+      return {
+        column: header,
+        attributeId: normalized,
+        include: true,
+      };
+    });
     const detectedEmailColumn = data.headers.find(
       (header) => data.normalized_headers[header] === "email",
     );
@@ -180,6 +187,19 @@ async function loadPreview() {
   } finally {
     isPreviewLoading.value = false;
   }
+}
+
+function updateColumnSetting(index, patch) {
+  columnSettings.value = columnSettings.value.map((column, columnIndex) => {
+    if (columnIndex !== index) {
+      return column;
+    }
+    const nextColumn = { ...column, ...patch };
+    if (nextColumn.attributeId === "email") {
+      nextColumn.include = true;
+    }
+    return nextColumn;
+  });
 }
 
 function stopPolling() {
@@ -326,6 +346,19 @@ async function submitRegistration() {
     errorMessage.value = "The file must include an Email column.";
     return;
   }
+  const includedAttributeIds = Object.values(autoMapping.value);
+  if (!includedAttributeIds.includes("email")) {
+    errorMessage.value = "The Email column must be included.";
+    return;
+  }
+  if (includedAttributeIds.some((attributeId) => !attributeId)) {
+    errorMessage.value = "Included columns must have a Livestorm field ID.";
+    return;
+  }
+  if (new Set(includedAttributeIds).size !== includedAttributeIds.length) {
+    errorMessage.value = "Included columns cannot use the same Livestorm field ID twice.";
+    return;
+  }
   if (!apiKey.value.trim()) {
     errorMessage.value = "Livestorm API key is required.";
     return;
@@ -450,7 +483,8 @@ async function submitRegistration() {
           <h2>Preview registrants</h2>
           <p>
             {{ preview.row_count }} row(s), {{ preview.headers.length }} column(s).
-            We automatically use normalized column names as Livestorm attribute IDs.
+            Email is required. Optional columns are dropped unless you include them
+            with a Livestorm field ID that exists on the session.
           </p>
         </div>
         <div class="preview-statuses">
@@ -464,13 +498,37 @@ async function submitRegistration() {
       </div>
 
       <div class="attribute-preview">
-        <span
-          v-for="item in mappedAttributePreview"
+        <div
+          v-for="(item, index) in mappedAttributePreview"
           :key="item.column"
-          class="attribute-chip"
+          class="column-card"
+          :class="{ included: item.include }"
         >
-          {{ item.column }} -> {{ item.attributeId }}
-        </span>
+          <div>
+            <strong>{{ item.column }}</strong>
+            <span>{{ item.required ? "Required email field" : "Optional field" }}</span>
+          </div>
+          <div class="column-actions">
+            <label class="include-toggle" :class="{ disabled: item.required }">
+              <input
+                type="checkbox"
+                :checked="item.include"
+                :disabled="item.required"
+                @change="updateColumnSetting(index, { include: $event.target.checked })"
+              />
+              <span class="toggle-track">
+                <span class="toggle-thumb"></span>
+              </span>
+            </label>
+            <strong class="toggle-label">{{ item.include ? "Send" : "Drop" }}</strong>
+          </div>
+          <input
+            :value="item.attributeId"
+            :disabled="!item.include || item.required"
+            placeholder="Livestorm field ID"
+            @input="updateColumnSetting(index, { attributeId: $event.target.value })"
+          />
+        </div>
       </div>
       <PreviewTable :headers="preview.headers" :rows="preview.preview_rows" />
 
@@ -725,6 +783,7 @@ body {
 }
 
 .notice {
+  margin-top: 16px;
   margin-bottom: 18px;
   padding: 14px 16px;
   border-radius: 16px;
@@ -781,17 +840,113 @@ body {
 }
 
 .attribute-preview {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
   margin-bottom: 16px;
 }
 
-.attribute-chip {
-  color: #4f6268;
-  background: rgba(18, 38, 43, 0.06);
+.column-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
   border: 1px solid var(--storm-line);
-  font-size: 0.82rem;
+  border-radius: 16px;
+  background: rgba(18, 38, 43, 0.035);
+}
+
+.column-card.included {
+  border-color: rgba(0, 229, 168, 0.55);
+  background: #f8fffc;
+}
+
+.column-card > div:first-child strong,
+.column-card > div:first-child span {
+  display: block;
+}
+
+.column-card > div:first-child span {
+  margin-top: 3px;
+  color: #607075;
+  font-size: 0.86rem;
+}
+
+.column-card input[type="text"],
+.column-card > input {
+  width: 100%;
+  border: 1px solid rgba(18, 38, 43, 0.18);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: white;
+}
+
+.column-card > input:disabled {
+  color: #94a3b8;
+  background: #f8fafc;
+}
+
+.column-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+}
+
+.include-toggle {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  cursor: pointer;
+}
+
+.include-toggle.disabled {
+  cursor: not-allowed;
+  opacity: 0.75;
+}
+
+.include-toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.toggle-track {
+  display: inline-flex;
+  align-items: center;
+  width: 48px;
+  height: 28px;
+  padding: 3px;
+  border-radius: 999px;
+  background: #d1d5db;
+  transition: background 0.2s ease;
+}
+
+.toggle-label {
+  line-height: 1;
+  color: var(--storm-ink);
+  font-size: 0.95rem;
+}
+
+.toggle-thumb {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: white;
+  box-shadow: 0 2px 8px rgba(18, 38, 43, 0.2);
+  transition: transform 0.2s ease;
+}
+
+.include-toggle input:checked + .toggle-track {
+  background: var(--storm-ink);
+}
+
+.include-toggle input:checked + .toggle-track .toggle-thumb {
+  transform: translateX(20px);
+}
+
+.include-toggle input:focus-visible + .toggle-track {
+  outline: 3px solid rgba(0, 229, 168, 0.35);
+  outline-offset: 2px;
 }
 
 .cta-card {

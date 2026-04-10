@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Optional, Union
 
 import httpx
+import re
 
 
 class LivestormAPIError(Exception):
@@ -192,7 +193,18 @@ class LivestormClient:
                     for item in message
                 )
             if message:
+                message = self._friendly_error_message(str(message))
                 detail = f"{fallback_message}: {message}"
         except Exception:
             pass
         return LivestormAPIError(detail)
+
+    def _friendly_error_message(self, message: str) -> str:
+        missing_fields = re.findall(r"The field '([^']+)' doesn't exist", message)
+        if missing_fields:
+            fields = ", ".join(sorted(set(missing_fields)))
+            return (
+                f"Unknown Livestorm field ID(s): {fields}. Drop these columns or rename "
+                "them to field IDs that exist in the selected session registration form."
+            )
+        return message

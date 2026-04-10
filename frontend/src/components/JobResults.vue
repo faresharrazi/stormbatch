@@ -33,6 +33,20 @@ function taskError(task) {
   return attributes.error || attributes.message || task?.error || task?.message || "";
 }
 
+function isAlreadyRegisteredMessage(message) {
+  const normalized = String(message).toLowerCase();
+  return normalized.includes("already been invited")
+    || normalized.includes("already registered")
+    || normalized.includes("identity has already been taken");
+}
+
+function displayError(task) {
+  const error = taskError(task);
+  return isAlreadyRegisteredMessage(error)
+    ? "Already registered"
+    : error || "Livestorm did not provide a row-level error.";
+}
+
 function rowLabel(task) {
   const row = task?.row_result || {};
   return [row.email, `Excel row ${row.row_number || "?"}`].filter(Boolean).join(" - ");
@@ -42,6 +56,14 @@ function failedTasks(job) {
   return (job.tasks || []).filter(
     (task) => String(taskStatus(task)).toLowerCase() === "failed",
   );
+}
+
+function alreadyRegisteredTasks(job) {
+  return failedTasks(job).filter((task) => isAlreadyRegisteredMessage(taskError(task)));
+}
+
+function actionableFailedTasks(job) {
+  return failedTasks(job).filter((task) => !isAlreadyRegisteredMessage(taskError(task)));
 }
 
 function succeededTasks(job) {
@@ -70,11 +92,16 @@ function summaryText(job) {
       : "The job finished successfully. Livestorm did not return row-level task details.";
   }
   const failed = failedTasks(job).length;
+  const alreadyRegistered = alreadyRegisteredTasks(job).length;
+  const actionable = actionableFailedTasks(job).length;
   const succeeded = succeededTasks(job).length;
   if (!failed) {
     return `${succeeded} registrant(s) succeeded.`;
   }
-  return `${succeeded} succeeded, ${failed} need attention.`;
+  if (!actionable) {
+    return `${succeeded} succeeded, ${alreadyRegistered} already registered.`;
+  }
+  return `${succeeded} succeeded, ${alreadyRegistered} already registered, ${actionable} need attention.`;
 }
 
 function cardClass(job) {
@@ -108,8 +135,9 @@ function cardClass(job) {
 
       <div v-if="failedTasks(job).length" class="failed-panel">
         <div class="failed-header">
-          <strong>Failed registrants</strong>
+          <strong>{{ actionableFailedTasks(job).length ? "Registrants needing attention" : "Already registered" }}</strong>
           <button
+            v-if="actionableFailedTasks(job).length"
             class="retry-button"
             type="button"
             :disabled="props.retryingSessions[job.session_id]"
@@ -119,10 +147,15 @@ function cardClass(job) {
           </button>
         </div>
 
-        <div v-for="task in failedTasks(job)" :key="task.id || rowLabel(task)" class="failed-row">
+        <div
+          v-for="task in failedTasks(job)"
+          :key="task.id || rowLabel(task)"
+          class="failed-row"
+          :class="{ duplicate: isAlreadyRegisteredMessage(taskError(task)) }"
+        >
           <div>
             <strong>{{ rowLabel(task) }}</strong>
-            <p>{{ taskError(task) || "Livestorm did not provide a row-level error." }}</p>
+            <p>{{ displayError(task) }}</p>
           </div>
         </div>
       </div>
@@ -148,7 +181,9 @@ function cardClass(job) {
         <strong>Retry results</strong>
         <div v-for="result in retryResults(job)" :key="`${result.email}-${result.row_number}`" class="retry-row">
           <span>{{ result.email }}</span>
-          <span :class="['retry-status', result.status]">{{ result.status }}</span>
+          <span :class="['retry-status', result.status]">
+            {{ result.status === "registered" ? "Already registered" : result.status }}
+          </span>
           <p v-if="result.error">{{ result.error }}</p>
         </div>
       </div>
@@ -249,6 +284,10 @@ h3 {
 .job-error {
   margin-top: 4px;
   color: #b91c1c;
+}
+
+.failed-row.duplicate p {
+  color: #3730a3;
 }
 
 .retry-button {

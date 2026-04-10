@@ -50,13 +50,50 @@ def read_excel_with_header_detection(raw_bytes: bytes) -> pd.DataFrame:
     return dataframe
 
 
+def read_csv_with_delimiter_detection(raw_bytes: bytes) -> pd.DataFrame:
+    try:
+        dataframe = pd.read_csv(BytesIO(raw_bytes), sep=None, engine="python")
+    except Exception:
+        # Fall back to the default comma parser if Python's CSV sniffer cannot
+        # infer the delimiter from a very small or unusual file.
+        dataframe = pd.read_csv(BytesIO(raw_bytes))
+
+    if dataframe.empty:
+        return dataframe
+
+    normalized_columns = [normalize_header(column) for column in dataframe.columns]
+    first_row_values = [
+        clean_cell(value)
+        for value in dataframe.iloc[0].tolist()
+        if clean_cell(value)
+    ]
+    normalized_first_row = [normalize_header(value) for value in first_row_values]
+    first_row_has_email = any(value in {"email", "email_address"} for value in normalized_first_row)
+    columns_have_email = any(value in {"email", "email_address"} for value in normalized_columns)
+
+    if first_row_has_email and not columns_have_email:
+        try:
+            return pd.read_csv(BytesIO(raw_bytes), sep=None, engine="python", header=1)
+        except Exception:
+            return pd.read_csv(BytesIO(raw_bytes), header=1)
+
+    return dataframe
+
+
 def read_upload_to_dataframe(filename: str, raw_bytes: bytes) -> pd.DataFrame:
     lowered_filename = filename.lower()
     if lowered_filename.endswith(".xlsx"):
         return read_excel_with_header_detection(raw_bytes)
     if lowered_filename.endswith(".csv"):
-        return pd.read_csv(BytesIO(raw_bytes))
+        return read_csv_with_delimiter_detection(raw_bytes)
     raise ValueError("The uploaded file must be .xlsx or .csv")
+
+
+def clean_dataframe(dataframe: pd.DataFrame) -> pd.DataFrame:
+    dataframe = dataframe.dropna(axis="columns", how="all")
+    dataframe.columns = [str(column).strip() for column in dataframe.columns]
+    dataframe = dataframe.loc[:, [not normalize_header(column).startswith("unnamed") for column in dataframe.columns]]
+    return dataframe.dropna(how="all")
 
 
 async def parse_excel_upload(file: UploadFile) -> dict:
@@ -71,8 +108,7 @@ async def parse_excel_upload(file: UploadFile) -> dict:
     if dataframe.empty:
         raise ValueError("Uploaded file is empty")
 
-    dataframe.columns = [str(column).strip() for column in dataframe.columns]
-    dataframe = dataframe.dropna(how="all")
+    dataframe = clean_dataframe(dataframe)
     if dataframe.empty:
         raise ValueError("Uploaded file is empty")
 

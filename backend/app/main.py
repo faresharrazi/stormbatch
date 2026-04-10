@@ -31,11 +31,12 @@ async def healthcheck() -> dict[str, str]:
 
 
 FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+FRONTEND_ASSETS = FRONTEND_DIST / "assets"
 
-if FRONTEND_DIST.exists():
+if FRONTEND_DIST.exists() and FRONTEND_ASSETS.exists():
     app.mount(
         "/assets",
-        StaticFiles(directory=FRONTEND_DIST / "assets"),
+        StaticFiles(directory=FRONTEND_ASSETS),
         name="frontend-assets",
     )
 

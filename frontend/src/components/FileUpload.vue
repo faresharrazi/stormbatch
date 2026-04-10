@@ -1,4 +1,6 @@
 <script setup>
+import { ref } from "vue";
+
 defineProps({
   selectedFile: {
     type: Object,
@@ -14,7 +16,8 @@ defineProps({
   },
 });
 
-defineEmits(["file-selected", "preview"]);
+const emit = defineEmits(["file-selected", "preview"]);
+const isDragging = ref(false);
 
 function onChange(event) {
   const [file] = event.target.files;
@@ -28,6 +31,18 @@ function onChange(event) {
   }
   return null;
 }
+
+function selectFile(file) {
+  if (file) {
+    emit("file-selected", file);
+  }
+}
+
+function onDrop(event) {
+  isDragging.value = false;
+  const [file] = event.dataTransfer.files;
+  selectFile(file);
+}
 </script>
 
 <template>
@@ -38,23 +53,38 @@ function onChange(event) {
       <p>StormBatch reads .xlsx or .csv files, trims headers and values, and previews the first rows before anything is sent.</p>
     </div>
 
-    <label class="drop-zone" :class="{ selected: selectedFile }">
+    <label
+      class="drop-zone"
+      :class="{ selected: selectedFile, dragging: isDragging }"
+      @dragenter.prevent="isDragging = true"
+      @dragover.prevent="isDragging = true"
+      @dragleave.prevent="isDragging = false"
+      @drop.prevent="onDrop"
+    >
       <input
         type="file"
         accept=".xlsx,.csv"
         @change="
           ($event) => {
             const file = onChange($event);
-            if (file) $emit('file-selected', file);
+            selectFile(file);
           }
         "
       />
-      <span class="file-icon">XLSX</span>
+      <span class="file-icon">FILE</span>
       <strong>{{ selectedFile ? selectedFile.name : "Choose an .xlsx or .csv file" }}</strong>
-      <small>{{ selectedFile ? "Ready to preview" : "Click to browse from your computer" }}</small>
+      <small>
+        {{
+          selectedFile
+            ? "Ready to preview"
+            : isDragging
+              ? "Release to upload"
+              : "Drag and drop here, or click to browse"
+        }}
+      </small>
     </label>
 
-    <button class="secondary-button" type="button" :disabled="loading || !selectedFile" @click="$emit('preview')">
+    <button class="secondary-button" type="button" :disabled="loading || !selectedFile" @click="emit('preview')">
       <span v-if="loading" class="spinner"></span>
       {{ loading ? "Reading file..." : previewReady ? "Refresh preview" : "Detect columns and preview" }}
     </button>
@@ -112,6 +142,14 @@ function onChange(event) {
 .drop-zone:hover {
   border-color: #12262b;
   transform: translateY(-1px);
+}
+
+.drop-zone.dragging {
+  border-color: #00e5a8;
+  background:
+    radial-gradient(circle at center, rgba(0, 229, 168, 0.28), transparent 58%),
+    #f0fff9;
+  transform: translateY(-2px) scale(1.01);
 }
 
 .drop-zone.selected {
