@@ -50,22 +50,31 @@ def read_excel_with_header_detection(raw_bytes: bytes) -> pd.DataFrame:
     return dataframe
 
 
+def read_upload_to_dataframe(filename: str, raw_bytes: bytes) -> pd.DataFrame:
+    lowered_filename = filename.lower()
+    if lowered_filename.endswith(".xlsx"):
+        return read_excel_with_header_detection(raw_bytes)
+    if lowered_filename.endswith(".csv"):
+        return pd.read_csv(BytesIO(raw_bytes))
+    raise ValueError("The uploaded file must be .xlsx or .csv")
+
+
 async def parse_excel_upload(file: UploadFile) -> dict:
-    if not file.filename or not file.filename.lower().endswith(".xlsx"):
-        raise ValueError("The uploaded file must be .xlsx")
+    if not file.filename:
+        raise ValueError("The uploaded file must be .xlsx or .csv")
 
     raw_bytes = await file.read()
     if not raw_bytes:
-        raise ValueError("Excel file is empty")
+        raise ValueError("Uploaded file is empty")
 
-    dataframe = read_excel_with_header_detection(raw_bytes)
+    dataframe = read_upload_to_dataframe(file.filename, raw_bytes)
     if dataframe.empty:
-        raise ValueError("Excel file is empty")
+        raise ValueError("Uploaded file is empty")
 
     dataframe.columns = [str(column).strip() for column in dataframe.columns]
     dataframe = dataframe.dropna(how="all")
     if dataframe.empty:
-        raise ValueError("Excel file is empty")
+        raise ValueError("Uploaded file is empty")
 
     rows = []
     for row in dataframe.to_dict(orient="records"):

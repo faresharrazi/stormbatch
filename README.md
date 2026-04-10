@@ -1,12 +1,12 @@
 # StormBatch
 
-StormBatch is a simple local MVP for bulk-registering people from an Excel file into one or more Livestorm sessions.
+StormBatch is a simple local MVP for bulk-registering people from a spreadsheet into one or more Livestorm sessions.
 
 ## Stack
 
 - Frontend: Vue 3 + Vite
 - Backend: FastAPI
-- Excel parsing: pandas + openpyxl
+- Spreadsheet parsing: pandas + openpyxl
 - Livestorm HTTP client: httpx
 
 ## Run locally
@@ -35,7 +35,7 @@ Open `http://localhost:5173`.
 
 ## Notes
 
-- The app re-reads the uploaded `.xlsx` file when you submit, so there is no database or server-side persistence.
+- The app accepts `.xlsx` and `.csv` uploads and re-reads the file when you submit, so there is no database or server-side persistence.
 - The frontend polls `/api/job-status` every 2.5 seconds after the jobs are created.
 - Job polling uses Livestorm's documented endpoints: `GET /v1/jobs/{id}` and `GET /v1/jobs/{id}/tasks`.
 - Email is the only mandatory field for Livestorm API registrations. Extra mapped fields are optional prefill data; attendees can complete other required event fields later before joining.

@@ -31,7 +31,7 @@ def validate_mapping_and_rows(mapping: dict, rows: list[dict]) -> dict:
 
     email_columns = [column for column, attribute in column_to_attribute.items() if attribute == "email"]
     if not email_columns:
-        raise ValueError("The Excel file must include an Email column")
+        raise ValueError("The file must include an Email column")
 
     email_column = email_columns[0]
     missing_emails = [index + 2 for index, row in enumerate(rows) if not row.get(email_column, "").strip()]

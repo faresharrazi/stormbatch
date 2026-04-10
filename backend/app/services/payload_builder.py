@@ -9,7 +9,7 @@ def build_bulk_job_payload(rows: list[dict], mapping: dict[str, str]) -> list[di
             value = row.get(column_name, "").strip()
             if not value:
                 if attribute_id == "email":
-                    raise ValueError("The Excel file must include an Email column")
+                    raise ValueError("The file must include an Email column")
                 continue
             fields.append({"id": attribute_id, "value": value})
         tasks.append({"fields": fields})

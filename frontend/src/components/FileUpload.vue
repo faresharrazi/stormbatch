@@ -33,15 +33,15 @@ function onChange(event) {
 <template>
   <div class="upload-card">
     <div class="upload-copy">
-      <span>Excel workbook</span>
+      <span>Spreadsheet upload</span>
       <strong>Drop in the registrant list</strong>
-      <p>StormBatch reads the first sheet, trims headers and values, and previews the first rows before anything is sent.</p>
+      <p>StormBatch reads .xlsx or .csv files, trims headers and values, and previews the first rows before anything is sent.</p>
     </div>
 
     <label class="drop-zone" :class="{ selected: selectedFile }">
       <input
         type="file"
-        accept=".xlsx"
+        accept=".xlsx,.csv"
         @change="
           ($event) => {
             const file = onChange($event);
@@ -50,13 +50,13 @@ function onChange(event) {
         "
       />
       <span class="file-icon">XLSX</span>
-      <strong>{{ selectedFile ? selectedFile.name : "Choose an .xlsx file" }}</strong>
+      <strong>{{ selectedFile ? selectedFile.name : "Choose an .xlsx or .csv file" }}</strong>
       <small>{{ selectedFile ? "Ready to preview" : "Click to browse from your computer" }}</small>
     </label>
 
     <button class="secondary-button" type="button" :disabled="loading || !selectedFile" @click="$emit('preview')">
       <span v-if="loading" class="spinner"></span>
-      {{ loading ? "Reading workbook..." : previewReady ? "Refresh preview" : "Detect columns and preview" }}
+      {{ loading ? "Reading file..." : previewReady ? "Refresh preview" : "Detect columns and preview" }}
     </button>
   </div>
 </template>

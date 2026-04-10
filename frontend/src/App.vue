@@ -147,7 +147,7 @@ function startNewBatch() {
 
 async function loadPreview() {
   if (!selectedFile.value) {
-    errorMessage.value = "Please choose an .xlsx file first.";
+    errorMessage.value = "Please choose an .xlsx or .csv file first.";
     return;
   }
 
@@ -311,11 +311,11 @@ async function submitRegistration() {
   resetMessages();
 
   if (!selectedFile.value) {
-    errorMessage.value = "Please upload an .xlsx file.";
+    errorMessage.value = "Please upload an .xlsx or .csv file.";
     return;
   }
   if (!preview.value) {
-    errorMessage.value = "Preview the Excel file before submitting.";
+    errorMessage.value = "Preview the file before submitting.";
     return;
   }
   if (!parsedSessionIds.value.length) {
@@ -323,7 +323,7 @@ async function submitRegistration() {
     return;
   }
   if (!hasEmailColumn.value) {
-    errorMessage.value = "The Excel file must include an Email column.";
+    errorMessage.value = "The file must include an Email column.";
     return;
   }
   if (!apiKey.value.trim()) {
