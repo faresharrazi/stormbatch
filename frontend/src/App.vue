@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from "vue";
+import { computed, ref } from "vue";
 import ApiKeyInput from "./components/ApiKeyInput.vue";
 import FileUpload from "./components/FileUpload.vue";
 import JobResults from "./components/JobResults.vue";
@@ -8,6 +8,7 @@ import SessionIdsInput from "./components/SessionIdsInput.vue";
 import livestormIcon from "../assets/Icon-Livestorm-Primary.png";
 
 const BULK_JOB_CHUNK_SIZE = 50;
+const JOB_STATUS_POLL_INTERVAL_MS = 5000;
 
 const apiKey = ref("");
 const sessionIds = ref("");
@@ -20,15 +21,11 @@ const errorMessage = ref("");
 const successMessage = ref("");
 const isPreviewLoading = ref(false);
 const isSubmitting = ref(false);
-const poller = ref(null);
 const rowResults = ref([]);
 const hasSubmittedJobs = ref(false);
 const retryingSessions = ref({});
 const totalSessionCount = ref(0);
 const createdSessionCount = ref(0);
-const isPollingTick = ref(false);
-const displayedProgressPercent = ref(0);
-const progressAnimator = ref(null);
 
 const parsedSessionIds = computed(() =>
   sessionIds.value
@@ -69,6 +66,43 @@ const finishedJobs = computed(() =>
   ).length,
 );
 
+function taskStatus(task) {
+  return task?.attributes?.status || task?.status || "unknown";
+}
+
+function taskError(task) {
+  const attributes = task?.attributes || {};
+  const errors = attributes.errors || task?.errors;
+  if (Array.isArray(errors)) {
+    return errors
+      .map((error) => error.detail || error.title || error.message || String(error))
+      .join(", ");
+  }
+  return attributes.error || attributes.message || task?.error || task?.message || "";
+}
+
+function isAlreadyRegisteredMessage(message) {
+  const normalized = String(message).toLowerCase();
+  return normalized.includes("already been invited")
+    || normalized.includes("already registered")
+    || normalized.includes("identity has already been taken");
+}
+
+function failedJobTasks(job) {
+  return (job.tasks || []).filter(
+    (task) => String(taskStatus(task)).toLowerCase() === "failed",
+  );
+}
+
+function hasActionableFailure(job) {
+  const status = String(job.status).toLowerCase();
+  const failedTasks = failedJobTasks(job);
+  if (failedTasks.length) {
+    return failedTasks.some((task) => !isAlreadyRegisteredMessage(taskError(task)));
+  }
+  return status === "failed";
+}
+
 const expectedJobCount = computed(() => {
   if (!preview.value || !parsedSessionIds.value.length) {
     return parsedSessionIds.value.length;
@@ -80,18 +114,13 @@ const expectedJobCount = computed(() => {
   return parsedSessionIds.value.length * chunksPerSession;
 });
 
-const targetProgressPercent = computed(() => {
+const progressPercent = computed(() => {
   const total = totalSessionCount.value || jobs.value.length;
   if (!total) {
     return 0;
   }
-  if (isSubmitting.value) {
-    return Math.min(50, Math.round((createdSessionCount.value / total) * 50));
-  }
-  return Math.round(50 + ((finishedJobs.value / total) * 50));
+  return Math.min(100, Math.round((createdSessionCount.value / total) * 100));
 });
-
-const progressPercent = computed(() => displayedProgressPercent.value);
 
 const isPollingJobs = computed(() =>
   jobs.value.some(
@@ -99,15 +128,16 @@ const isPollingJobs = computed(() =>
   ),
 );
 
+const visibleResultJobs = computed(() =>
+  jobs.value.filter((job) => hasActionableFailure(job) || job.retry_results?.length),
+);
+
 const registrationSummary = computed(() => {
   const taskResults = jobs.value.flatMap((job) => job.tasks || []);
   const failedTasks = taskResults.filter((task) => {
-    const status = task?.attributes?.status || task?.status;
-    return String(status).toLowerCase() === "failed";
+    return String(taskStatus(task)).toLowerCase() === "failed";
   }).length;
-  const failedJobs = jobs.value.filter(
-    (job) => String(job.status).toLowerCase() === "failed",
-  ).length;
+  const failedJobs = jobs.value.filter((job) => hasActionableFailure(job)).length;
 
   return {
     jobs: totalSessionCount.value || jobs.value.length || (isSubmitting.value ? expectedJobCount.value : 0),
@@ -121,23 +151,37 @@ const registrationSummary = computed(() => {
 
 const progressTitle = computed(() => {
   if (isSubmitting.value) {
-    return "Creating Livestorm jobs in safe batches...";
+    return "Registering...";
   }
   if (isPollingJobs.value) {
-    return "Livestorm is processing...";
+    return "Checking results...";
   }
   return registrationSummary.value.failedJobs ? "Batch finished with failed jobs" : "Batch complete";
 });
 
+const progressMessage = computed(() => {
+  if (isSubmitting.value) {
+    const total = totalSessionCount.value || expectedJobCount.value;
+    const current = Math.min(createdSessionCount.value + 1, total);
+    return total ? `Processing batch ${current} of ${total}.` : "Sending registrants to Livestorm.";
+  }
+  if (isPollingJobs.value) {
+    return "Checking Livestorm results.";
+  }
+  return registrationSummary.value.failedJobs
+    ? "Review the rows that need attention below."
+    : "All done. Review the results below.";
+});
+
 const completionTitle = computed(() =>
-  registrationSummary.value.failedJobs ? "Some Livestorm jobs failed" : "Livestorm jobs confirmed",
+  registrationSummary.value.failedJobs ? "Some registrants need attention" : "Registration complete",
 );
 
 const completionMessage = computed(() => {
   if (registrationSummary.value.failedJobs) {
-    return `${registrationSummary.value.failedJobs} of ${registrationSummary.value.jobs} job(s) failed. Review the session details below.`;
+    return "Some registrants need attention. Review the details below.";
   }
-  return `${registrationSummary.value.jobs} job(s) finished successfully. Review per-session and per-row outcomes below.`;
+  return "Batch registration finished successfully.";
 });
 
 function resetMessages() {
@@ -153,9 +197,6 @@ function onFileSelected(file) {
   rowResults.value = [];
   hasSubmittedJobs.value = false;
   duplicateEmails.value = [];
-  displayedProgressPercent.value = 0;
-  stopPolling();
-  stopProgressAnimator();
   resetMessages();
 }
 
@@ -171,14 +212,10 @@ function startNewBatch() {
   retryingSessions.value = {};
   totalSessionCount.value = 0;
   createdSessionCount.value = 0;
-  isPollingTick.value = false;
-  displayedProgressPercent.value = 0;
   isSubmitting.value = false;
   isPreviewLoading.value = false;
   totalSessionCount.value = 0;
   createdSessionCount.value = 0;
-  stopPolling();
-  stopProgressAnimator();
   resetMessages();
 }
 
@@ -240,44 +277,6 @@ function updateColumnSetting(index, patch) {
   });
 }
 
-function stopPolling() {
-  if (poller.value) {
-    clearInterval(poller.value);
-    poller.value = null;
-  }
-  isPollingTick.value = false;
-}
-
-function stopProgressAnimator() {
-  if (progressAnimator.value) {
-    clearInterval(progressAnimator.value);
-    progressAnimator.value = null;
-  }
-}
-
-function startProgressAnimator() {
-  stopProgressAnimator();
-  progressAnimator.value = setInterval(() => {
-    const target = targetProgressPercent.value;
-    const activeCap = isSubmitting.value ? 49 : 95;
-    const cap = isSubmitting.value || isPollingJobs.value ? Math.max(target, activeCap) : target;
-
-    if (displayedProgressPercent.value < cap) {
-      displayedProgressPercent.value = Math.min(cap, displayedProgressPercent.value + 1);
-    }
-  }, 700);
-}
-
-watch(targetProgressPercent, (target) => {
-  if (target > displayedProgressPercent.value) {
-    displayedProgressPercent.value = target;
-  }
-  if (!isSubmitting.value && !isPollingJobs.value) {
-    displayedProgressPercent.value = target;
-    stopProgressAnimator();
-  }
-});
-
 function attachRowResults(tasks, job) {
   const sourceRows = job?.row_results?.length ? job.row_results : rowResults.value;
   return tasks.map((task, index) => ({
@@ -291,10 +290,7 @@ function attachRowResults(tasks, job) {
 }
 
 function jobFailedTasks(job) {
-  return (job.tasks || []).filter((task) => {
-    const status = task?.attributes?.status || task?.status;
-    return String(status).toLowerCase() === "failed";
-  });
+  return failedJobTasks(job);
 }
 
 function wait(milliseconds) {
@@ -303,74 +299,43 @@ function wait(milliseconds) {
   });
 }
 
-async function pollJobStatuses() {
-  if (isPollingTick.value) {
-    return;
-  }
+async function pollJobUntilFinished(job) {
+  while (!["ended", "failed", "completed"].includes(String(job.status).toLowerCase())) {
+    const response = await fetch("/api/job-status", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        api_key: apiKey.value,
+        session_id: job.session_id,
+        job_id: job.job_id,
+      }),
+    });
+    const data = await response.json();
 
-  const activeJobs = jobs.value.filter((job) =>
-    !["ended", "failed", "completed"].includes(String(job.status).toLowerCase()),
-  );
-
-  if (!activeJobs.length) {
-    stopPolling();
-    return;
-  }
-
-  isPollingTick.value = true;
-
-  try {
-    for (const [index, job] of activeJobs.entries()) {
-      const response = await fetch("/api/job-status", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          api_key: apiKey.value,
-          session_id: job.session_id,
-          job_id: job.job_id,
-        }),
-      });
-      const data = await response.json();
-
-      if (!response.ok) {
-        const detail = data.detail || "Failed to fetch job status";
-        if (String(detail).toLowerCase().includes("throttle limit")) {
-          job.error = "Livestorm is rate limiting status checks. StormBatch will keep waiting and try again.";
-          if (index < activeJobs.length - 1) {
-            await wait(300);
-          }
-          continue;
-        }
-        job.status = "failed";
-        job.error = detail;
-        if (index < activeJobs.length - 1) {
-          await wait(300);
-        }
+    if (!response.ok) {
+      const detail = data.detail || "Failed to fetch job status";
+      if (String(detail).toLowerCase().includes("throttle limit")) {
+        job.error = "Livestorm is rate limiting status checks. StormBatch will keep waiting and try again.";
+        await wait(JOB_STATUS_POLL_INTERVAL_MS);
         continue;
       }
-
-      job.status = data.status;
-      job.tasks = attachRowResults(data.tasks || [], job);
-      job.raw = data.raw || {};
-      job.error = "";
-      if (index < activeJobs.length - 1) {
-        await wait(300);
-      }
+      job.status = "failed";
+      job.error = detail;
+      return;
     }
-  } finally {
-    isPollingTick.value = false;
-  }
 
-  const finished = jobs.value.every((job) =>
-    ["ended", "failed", "completed"].includes(String(job.status).toLowerCase()),
-  );
-  if (finished) {
-    stopPolling();
-    displayedProgressPercent.value = targetProgressPercent.value;
-    stopProgressAnimator();
-    successMessage.value = "All Livestorm jobs finished.";
+    job.status = data.status;
+    job.tasks = attachRowResults(data.tasks || [], job);
+    job.raw = data.raw || {};
+    job.warning = data.tasks_error
+      ? "Livestorm confirmed this job, but row-level details are temporarily unavailable."
+      : "";
+    job.error = "";
+    if (!["ended", "failed", "completed"].includes(String(job.status).toLowerCase())) {
+      await wait(JOB_STATUS_POLL_INTERVAL_MS);
+    }
   }
 }
 
@@ -460,9 +425,6 @@ async function submitRegistration() {
   hasSubmittedJobs.value = false;
   totalSessionCount.value = expectedJobCount.value;
   createdSessionCount.value = 0;
-  displayedProgressPercent.value = 0;
-  stopPolling();
-  startProgressAnimator();
 
   try {
     for (const sessionId of parsedSessionIds.value) {
@@ -470,78 +432,73 @@ async function submitRegistration() {
         1,
         Math.ceil(preview.value.row_count / BULK_JOB_CHUNK_SIZE),
       );
-      const formData = new FormData();
-      formData.append("api_key", apiKey.value.trim());
-      formData.append("session_ids", sessionId);
-      formData.append("mapping", JSON.stringify(autoMapping.value));
-      formData.append("file", selectedFile.value);
+      for (let chunkIndex = 1; chunkIndex <= expectedChunksForSession; chunkIndex += 1) {
+        const formData = new FormData();
+        formData.append("api_key", apiKey.value.trim());
+        formData.append("session_ids", sessionId);
+        formData.append("mapping", JSON.stringify(autoMapping.value));
+        formData.append("chunk_index", String(chunkIndex));
+        formData.append("chunk_size", String(BULK_JOB_CHUNK_SIZE));
+        formData.append("file", selectedFile.value);
 
-      const response = await fetch("/api/register", {
-        method: "POST",
-        body: formData,
-      });
-      const data = await response.json();
-
-      if (!response.ok) {
-        jobs.value.push({
-          session_id: sessionId,
-          job_id: "not-created",
-          status: "failed",
-          chunk_index: 1,
-          chunk_count: expectedChunksForSession,
-          row_start: 2,
-          row_count: preview.value.row_count,
-          row_results: rowResults.value,
-          tasks: [],
-          raw: {},
-          error: data.detail || "Registration failed",
+        const response = await fetch("/api/register", {
+          method: "POST",
+          body: formData,
         });
-        createdSessionCount.value += expectedChunksForSession;
-      } else {
+        const data = await response.json();
+
+        if (!response.ok) {
+          jobs.value.push({
+            session_id: sessionId,
+            job_id: `not-created-${chunkIndex}`,
+            status: "failed",
+            chunk_index: chunkIndex,
+            chunk_count: expectedChunksForSession,
+            row_start: ((chunkIndex - 1) * BULK_JOB_CHUNK_SIZE) + 2,
+            row_count: Math.min(
+              BULK_JOB_CHUNK_SIZE,
+              preview.value.row_count - ((chunkIndex - 1) * BULK_JOB_CHUNK_SIZE),
+            ),
+            row_results: rowResults.value,
+            tasks: [],
+            raw: {},
+            warning: "",
+            error: data.detail || "Registration failed",
+          });
+          createdSessionCount.value += 1;
+          continue;
+        }
+
         if (!rowResults.value.length) {
           rowResults.value = data.row_results || [];
         }
-        (data.jobs || []).forEach((createdJob) => {
-          jobs.value.push({
+        duplicateEmails.value = data.duplicate_emails || [];
+
+        for (const createdJob of data.jobs || []) {
+          const job = {
             ...createdJob,
             row_results: createdJob.row_results || [],
             tasks: [],
             raw: {},
+            warning: "",
             error: "",
-          });
-        });
-        duplicateEmails.value = data.duplicate_emails || [];
-        createdSessionCount.value += (data.jobs || []).length;
-      }
-
-      if (createdSessionCount.value < totalSessionCount.value) {
-        await wait(900);
+          };
+          jobs.value.push(job);
+          await pollJobUntilFinished(job);
+          createdSessionCount.value += 1;
+        }
       }
     }
 
-    totalSessionCount.value = jobs.value.length || totalSessionCount.value;
-    createdSessionCount.value = jobs.value.length || createdSessionCount.value;
     hasSubmittedJobs.value = true;
 
-    if (duplicateEmails.value.length) {
-      successMessage.value =
-        "Jobs created. Duplicate emails were detected in the file, so Livestorm may reject some rows.";
-    } else {
-      successMessage.value = "Jobs created. Polling Livestorm for updates.";
-    }
-
-    if (jobs.value.some((job) => !["ended", "failed", "completed"].includes(String(job.status).toLowerCase()))) {
-      poller.value = setInterval(pollJobStatuses, 12000);
-      await pollJobStatuses();
-    }
+    successMessage.value = duplicateEmails.value.length
+      ? "Batch finished. Duplicate emails were detected in the file, so Livestorm may reject some rows."
+      : "Batch finished.";
   } catch (error) {
     errorMessage.value = error.message;
   } finally {
     isSubmitting.value = false;
-    if (!isPollingJobs.value) {
-      displayedProgressPercent.value = targetProgressPercent.value;
-      stopProgressAnimator();
-    }
   }
 }
 </script>
@@ -669,10 +626,7 @@ async function submitRegistration() {
         <div>
           <span class="step-label">Job progress</span>
           <h2>{{ progressTitle }}</h2>
-          <p>
-            StormBatch is pacing requests to stay under Livestorm rate limits,
-            then watching each job until it finishes.
-          </p>
+          <p>{{ progressMessage }}</p>
         </div>
         <strong class="progress-percent">{{ progressPercent }}%</strong>
       </div>
@@ -698,15 +652,15 @@ async function submitRegistration() {
       </button>
     </section>
 
-    <section v-if="jobs.length" class="panel">
+    <section v-if="visibleResultJobs.length" class="panel">
       <div class="panel-header results-header">
         <div>
           <span class="step-label">Results</span>
-          <h2>Job details</h2>
+          <h2>Rows needing attention</h2>
         </div>
       </div>
       <JobResults
-        :jobs="jobs"
+        :jobs="visibleResultJobs"
         :retrying-sessions="retryingSessions"
         @retry-failed="retryFailedRows"
       />

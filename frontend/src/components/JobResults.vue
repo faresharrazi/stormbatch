@@ -98,11 +98,21 @@ function summaryText(job) {
   return `${succeeded} succeeded, ${alreadyRegistered} already registered, ${actionable} need attention.`;
 }
 
+function displayStatus(job) {
+  if (failedTasks(job).length && !actionableFailedTasks(job).length) {
+    return "Already registered";
+  }
+  return job.status;
+}
+
 function cardClass(job) {
   if (!isFinal(job)) {
     return "processing";
   }
-  return failedTasks(job).length || String(job.status).toLowerCase() === "failed"
+  if (failedTasks(job).length && !actionableFailedTasks(job).length) {
+    return "succeeded";
+  }
+  return actionableFailedTasks(job).length || String(job.status).toLowerCase() === "failed"
     ? "has-failures"
     : "succeeded";
 }
@@ -122,10 +132,11 @@ function cardClass(job) {
           <h3>{{ job.session_id }}</h3>
           <p>{{ summaryText(job) }}</p>
         </div>
-        <span class="status">{{ job.status }}</span>
+        <span class="status">{{ displayStatus(job) }}</span>
       </div>
 
       <p v-if="job.error" class="job-error">{{ job.error }}</p>
+      <p v-if="job.warning" class="job-warning">{{ job.warning }}</p>
 
       <div v-if="failedTasks(job).length" class="failed-panel">
         <div class="failed-header">
@@ -261,6 +272,11 @@ h3 {
 .job-error {
   margin-top: 4px;
   color: #b91c1c;
+}
+
+.job-warning {
+  margin-top: 4px;
+  color: #8a5a00;
 }
 
 .failed-row.duplicate p {

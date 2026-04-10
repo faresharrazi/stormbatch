@@ -31,4 +31,5 @@ class JobStatusResponse(BaseModel):
     job_id: str
     status: str
     tasks: list[Any] = Field(default_factory=list)
+    tasks_error: Optional[str] = None
     raw: dict[str, Any] = Field(default_factory=dict)

@@ -1,5 +1,6 @@
 import asyncio
 import json
+from typing import Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
@@ -29,6 +30,8 @@ async def register_people(
     session_ids: str = Form(...),
     mapping: str = Form(...),
     file: UploadFile = File(...),
+    chunk_index: Optional[int] = Form(None),
+    chunk_size: int = Form(BULK_JOB_TASK_LIMIT),
 ) -> RegisterResponse:
     try:
         parsed = await parse_excel_upload(file)
@@ -38,14 +41,19 @@ async def register_people(
 
         tasks = build_bulk_job_payload(parsed["rows"], validation["column_to_attribute"])
         row_results = build_row_results(parsed["rows"], validation["column_to_attribute"])
-        task_chunks = iter_chunks(tasks, BULK_JOB_TASK_LIMIT)
+        task_chunks = iter_chunks(tasks, chunk_size or BULK_JOB_TASK_LIMIT)
+        if chunk_index is not None:
+            if chunk_index < 1 or chunk_index > len(task_chunks):
+                raise ValueError("Requested batch chunk is outside the file row range")
+            task_chunks = [task_chunks[chunk_index - 1]]
         total_job_count = len(session_id_list) * len(task_chunks)
 
         async with LivestormClient(api_key=api_key.strip()) as client:
             jobs = []
             created_job_count = 0
             for session_id in session_id_list:
-                for chunk_index, (row_start_index, chunk_tasks) in enumerate(task_chunks, start=1):
+                for local_chunk_index, (row_start_index, chunk_tasks) in enumerate(task_chunks, start=1):
+                    visible_chunk_index = chunk_index or local_chunk_index
                     created = await client.create_bulk_job(session_id=session_id, tasks=chunk_tasks)
                     created_job_count += 1
                     jobs.append(
@@ -53,8 +61,12 @@ async def register_people(
                             "session_id": session_id,
                             "job_id": created["job_id"],
                             "status": created.get("status", "pending"),
-                            "chunk_index": chunk_index,
-                            "chunk_count": len(task_chunks),
+                            "chunk_index": visible_chunk_index,
+                            "chunk_count": max(
+                                1,
+                                (len(tasks) + (chunk_size or BULK_JOB_TASK_LIMIT) - 1)
+                                // (chunk_size or BULK_JOB_TASK_LIMIT),
+                            ),
                             "row_start": row_start_index + 2,
                             "row_count": len(chunk_tasks),
                             "row_results": row_results[
